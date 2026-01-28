@@ -271,7 +271,7 @@
             }
 
             .name-input::placeholder {
-                color: var(--tertiary);
+                color: rgb(255, 0, 80);
             }
 
             .upload-zone {
@@ -725,10 +725,6 @@
                 <h1>La' Partzuf - Face Similarity</h1>
                 <p class="subtitle">Neural embedding analysis</p>
             </header>
-
-            <div class="status-banner" id="statusBanner">
-                Loading AI models...
-            </div>
 
             <div class="upload-section">
                 <div class="person-card person-1" data-person="1">
@@ -1199,19 +1195,16 @@
                     <div class="scale-endpoint left">
                         <img src="${person2Img}" alt="${personData["2"].name}" class="endpoint-avatar">
                         <div class="endpoint-name">${personData["2"].name}</div>
-                        <div class="endpoint-label">Left Ref</div>
                     </div>
 
                     <div class="scale-endpoint right">
                         <img src="${person1Img}" alt="${personData["1"].name}" class="endpoint-avatar">
                         <div class="endpoint-name">${personData["1"].name}</div>
-                        <div class="endpoint-label">Right Ref</div>
                     </div>
 
                     <div class="person-marker show" style="left: ${positionPercent}%">
                         <img src="${person3Img}" alt="${personData["3"].name}" class="marker-avatar">
                         <div class="marker-name">${personData["3"].name}</div>
-                        <div class="marker-label">Subject</div>
                     </div>
                 </div>
 
