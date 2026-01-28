@@ -1059,6 +1059,21 @@
                 return Math.sqrt(sum);
             }
 
+            function cosineDistance(embedding1, embedding2) {
+                let dotProduct = 0;
+                let norm1 = 0;
+                let norm2 = 0;
+                
+                for (let i = 0; i < embedding1.length; i++) {
+                    dotProduct += embedding1[i] * embedding2[i];
+                    norm1 += embedding1[i] * embedding1[i];
+                    norm2 += embedding2[i] * embedding2[i];
+                }
+                
+                const cosSim = dotProduct / (Math.sqrt(norm1) * Math.sqrt(norm2));
+                return 1 - cosSim;
+            }
+            
             function averageEmbeddings(embeddings) {
                 const dim = embeddings[0].length;
                 const avg = new Array(dim).fill(0);
@@ -1132,15 +1147,15 @@
                     );
 
                     // Calculate distances
-                    const distance_1_2 = euclideanDistance(
+                    const distance_1_2 = cosineDistance(
                         embedding1,
                         embedding2,
                     );
-                    const distance_1_3 = euclideanDistance(
+                    const distance_1_3 = cosineDistance(
                         embedding1,
                         embedding3,
                     );
-                    const distance_2_3 = euclideanDistance(
+                    const distance_2_3 = cosineDistance(
                         embedding2,
                         embedding3,
                     );
