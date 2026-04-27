@@ -453,6 +453,60 @@
                 color: rgb(255, 0, 80);
             }
 
+            .add-photos-btn {
+                display: block;
+                width: 100%;
+                padding: 0.875rem 1rem;
+                background: var(--bg-elevated);
+                border: 1px solid var(--border);
+                border-radius: 10px;
+                color: var(--primary);
+                font-family: "Inter", sans-serif;
+                font-size: 0.95rem;
+                font-weight: 500;
+                cursor: pointer;
+                transition: all 0.2s ease;
+                margin-bottom: 1.25rem;
+            }
+
+            .add-photos-btn:hover {
+                background: var(--surface-hover);
+                border-color: var(--border-hover);
+            }
+
+            .add-photos-btn:active {
+                transform: scale(0.99);
+            }
+
+            .preview-img-wrap {
+                position: relative;
+                display: inline-block;
+            }
+
+            .preview-remove {
+                position: absolute;
+                top: 4px;
+                right: 4px;
+                width: 22px;
+                height: 22px;
+                border-radius: 50%;
+                background: rgba(0, 0, 0, 0.7);
+                color: #fff;
+                border: 1px solid rgba(255, 255, 255, 0.2);
+                font-size: 0.9rem;
+                line-height: 1;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                padding: 0;
+                transition: all 0.2s ease;
+            }
+
+            .preview-remove:hover {
+                background: rgba(255, 80, 80, 0.9);
+            }
+
             .upload-zone {
                 border: 2px dashed var(--border);
                 border-radius: 12px;
@@ -901,8 +955,8 @@
     <body>
         <div class="container">
             <header>
-                <h1>La' Partzuf - Face Similarity</h1>
-                <p class="subtitle">Neural embedding analysis</p>
+                <h1>La' Partzuf</h1>
+                <p class="subtitle">Face Similarity Analysis</p>
             </header>
 
             <div class="status-banner" id="statusBanner" style="display: none;">
@@ -947,37 +1001,20 @@
                             id="modalName"
                             placeholder="Enter name"
                         />
-                        <div class="upload-zone" id="modalUploadZone">
-                            <svg
-                                class="upload-icon"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="1.5"
-                            >
-                                <rect
-                                    x="3"
-                                    y="3"
-                                    width="18"
-                                    height="18"
-                                    rx="2"
-                                    ry="2"
-                                ></rect>
-                                <circle cx="8.5" cy="8.5" r="1.5"></circle>
-                                <polyline points="21 15 16 10 5 21"></polyline>
-                            </svg>
-                            <div class="upload-text">
-                                Upload images
-                                <small>Tap to select photos</small>
-                            </div>
-                            <input
-                                type="file"
-                                multiple
-                                accept="image/*"
-                                style="display: none"
-                                id="modalFileInput"
-                            />
-                        </div>
+                        <button
+                            type="button"
+                            class="add-photos-btn"
+                            id="modalUploadZone"
+                        >
+                            + Add Photos
+                        </button>
+                        <input
+                            type="file"
+                            multiple
+                            accept="image/*"
+                            style="display: none"
+                            id="modalFileInput"
+                        />
                         <div class="image-preview" id="modalPreview"></div>
                     </div>
                     <div class="modal-footer">
@@ -1108,12 +1145,34 @@
 
             function renderModalPreview(personId) {
                 modalPreview.innerHTML = "";
-                for (const item of personData[personId].images) {
-                    const el = document.createElement("img");
-                    el.src = item.data;
-                    el.className = "preview-img";
-                    modalPreview.appendChild(el);
-                }
+                personData[personId].images.forEach((item, idx) => {
+                    modalPreview.appendChild(makePreviewItem(item.data, idx));
+                });
+            }
+
+            function makePreviewItem(dataUrl, idx) {
+                const wrap = document.createElement("div");
+                wrap.className = "preview-img-wrap";
+                wrap.dataset.idx = idx;
+                const img = document.createElement("img");
+                img.src = dataUrl;
+                img.className = "preview-img";
+                const btn = document.createElement("button");
+                btn.type = "button";
+                btn.className = "preview-remove";
+                btn.setAttribute("aria-label", "Remove photo");
+                btn.textContent = "×";
+                btn.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    const personId = personModal.dataset.editing;
+                    if (!personId) return;
+                    const i = Number(wrap.dataset.idx);
+                    personData[personId].images.splice(i, 1);
+                    renderModalPreview(personId);
+                });
+                wrap.appendChild(img);
+                wrap.appendChild(btn);
+                return wrap;
             }
 
             function updateRoleButton(personId) {
@@ -1160,22 +1219,9 @@
                 if (personId) personData[personId].name = e.target.value;
             });
 
-            modalUploadZone.addEventListener("click", (e) => {
-                if (e.target !== modalFileInput) modalFileInput.click();
-            });
-            modalUploadZone.addEventListener("dragover", (e) => {
-                e.preventDefault();
-                modalUploadZone.classList.add("dragover");
-            });
-            modalUploadZone.addEventListener("dragleave", () => {
-                modalUploadZone.classList.remove("dragover");
-            });
-            modalUploadZone.addEventListener("drop", (e) => {
-                e.preventDefault();
-                modalUploadZone.classList.remove("dragover");
-                const personId = personModal.dataset.editing;
-                if (personId) handleFiles(personId, e.dataTransfer.files);
-            });
+            modalUploadZone.addEventListener("click", () =>
+                modalFileInput.click(),
+            );
             modalFileInput.addEventListener("change", (e) => {
                 const personId = personModal.dataset.editing;
                 if (personId) handleFiles(personId, e.target.files);
@@ -1192,10 +1238,7 @@
                             file: file,
                         });
                         if (personModal.dataset.editing === personId) {
-                            const img = document.createElement("img");
-                            img.src = e.target.result;
-                            img.className = "preview-img";
-                            modalPreview.appendChild(img);
+                            renderModalPreview(personId);
                         }
                     };
                     reader.readAsDataURL(file);
