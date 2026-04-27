@@ -289,6 +289,20 @@
                 overflow: hidden;
             }
 
+            .results-modal-card {
+                max-width: 720px;
+            }
+
+            .results-modal-body {
+                padding: 1.5rem;
+            }
+
+            @media (min-width: 768px) {
+                .results-modal-body {
+                    padding: 2rem;
+                }
+            }
+
             .modal-header {
                 padding: 1.1rem 1.5rem;
                 border-bottom: 1px solid var(--border);
@@ -1232,20 +1246,22 @@
                 Analyze
             </button>
 
-            <div class="spectrum-container" id="spectrumContainer">
-                <div class="spectrum-title">Similarity Spectrum</div>
-                <div id="spectrumContent">
-                    <p
-                        style="
-                            text-align: center;
-                            color: var(--secondary);
-                            font-style: italic;
-                            font-weight: 300;
-                        "
+        </div>
+
+        <div class="modal-overlay" id="resultsModal" aria-hidden="true">
+            <div class="modal-card results-modal-card">
+                <div class="modal-header">
+                    <div class="modal-title">Similarity</div>
+                    <button
+                        type="button"
+                        class="modal-close"
+                        id="resultsClose"
+                        aria-label="Close"
                     >
-                        Upload images for all three people to begin analysis
-                    </p>
+                        ×
+                    </button>
                 </div>
+                <div class="results-modal-body" id="spectrumContent"></div>
             </div>
         </div>
 
@@ -1957,11 +1973,38 @@
                 .getElementById("analyzeBtn")
                 .addEventListener("click", analyzeSimilarity);
 
+            const resultsModal = document.getElementById("resultsModal");
+
+            function openResultsModal() {
+                resultsModal.classList.add("show");
+                resultsModal.setAttribute("aria-hidden", "false");
+            }
+
+            function closeResultsModal() {
+                resultsModal.classList.remove("show");
+                resultsModal.setAttribute("aria-hidden", "true");
+            }
+
+            document
+                .getElementById("resultsClose")
+                .addEventListener("click", closeResultsModal);
+            resultsModal.addEventListener("click", (e) => {
+                if (e.target === resultsModal) closeResultsModal();
+            });
+            document.addEventListener("keydown", (e) => {
+                if (
+                    e.key === "Escape" &&
+                    resultsModal.classList.contains("show")
+                )
+                    closeResultsModal();
+            });
+
             async function analyzeSimilarity() {
                 const spectrumContent =
                     document.getElementById("spectrumContent");
                 spectrumContent.innerHTML =
                     '<p class="loading">Analyzing facial features</p>';
+                openResultsModal();
 
                 try {
                     if (!modelsLoaded) {
