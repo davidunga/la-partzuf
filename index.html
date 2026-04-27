@@ -1251,6 +1251,7 @@
             let modelsReadyPromise = null;
             let detSession = null;
             let recSession = null;
+            let ageAxis = null;
 
             const MAX_PHOTO_DIM = 800;
 
@@ -1311,10 +1312,19 @@
                     ort.InferenceSession.create("models/recognition.onnx", {
                         executionProviders: ["wasm"],
                     }),
+                    fetch("models/age_axis.json")
+                        .then((r) => (r.ok ? r.json() : null))
+                        .then((d) =>
+                            d && Array.isArray(d.direction)
+                                ? new Float32Array(d.direction)
+                                : null,
+                        )
+                        .catch(() => null),
                 ])
-                    .then(([det, rec]) => {
+                    .then(([det, rec, axis]) => {
                         detSession = det;
                         recSession = rec;
+                        ageAxis = axis;
                         modelsLoaded = true;
                         statusBanner.classList.remove("loading");
                         statusBanner.textContent = "Ready to analyze faces";
@@ -1725,12 +1735,24 @@
                 );
                 const out = await recSession.run(feeds);
                 const emb = out[recSession.outputNames[0]].data;
-                // L2-normalize
+                const dim = emb.length;
                 let norm = 0;
-                for (let i = 0; i < emb.length; i++) norm += emb[i] * emb[i];
+                for (let i = 0; i < dim; i++) norm += emb[i] * emb[i];
                 norm = Math.sqrt(norm) || 1;
-                const normed = new Float32Array(emb.length);
-                for (let i = 0; i < emb.length; i++) normed[i] = emb[i] / norm;
+                const normed = new Float32Array(dim);
+                for (let i = 0; i < dim; i++) normed[i] = emb[i] / norm;
+
+                if (ageAxis && ageAxis.length === dim) {
+                    let dot = 0;
+                    for (let i = 0; i < dim; i++)
+                        dot += normed[i] * ageAxis[i];
+                    for (let i = 0; i < dim; i++)
+                        normed[i] -= dot * ageAxis[i];
+                    let n2 = 0;
+                    for (let i = 0; i < dim; i++) n2 += normed[i] * normed[i];
+                    n2 = Math.sqrt(n2) || 1;
+                    for (let i = 0; i < dim; i++) normed[i] /= n2;
+                }
                 return normed;
             }
 
