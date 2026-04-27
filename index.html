@@ -1183,7 +1183,7 @@
             </div>
 
             <button class="analyze-btn" id="analyzeBtn" disabled>
-                Analyze Similarity
+                Analyze
             </button>
 
             <div class="spectrum-container" id="spectrumContainer">
@@ -1248,8 +1248,37 @@
             }
 
             let modelsLoaded = false;
+            let modelsReadyPromise = null;
             let detSession = null;
             let recSession = null;
+
+            const MAX_PHOTO_DIM = 800;
+
+            function downscaleImage(dataUrl) {
+                return new Promise((resolve) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        const scale = Math.min(
+                            1,
+                            MAX_PHOTO_DIM / Math.max(img.width, img.height),
+                        );
+                        if (scale >= 1) {
+                            resolve(dataUrl);
+                            return;
+                        }
+                        const w = Math.round(img.width * scale);
+                        const h = Math.round(img.height * scale);
+                        const canvas = document.createElement("canvas");
+                        canvas.width = w;
+                        canvas.height = h;
+                        const ctx = canvas.getContext("2d");
+                        ctx.drawImage(img, 0, 0, w, h);
+                        resolve(canvas.toDataURL("image/jpeg", 0.9));
+                    };
+                    img.onerror = () => resolve(dataUrl);
+                    img.src = dataUrl;
+                });
+            }
 
             const DET_INPUT_SIZE = 640;
             const DET_SCORE_THRESH = 0.5;
@@ -1267,37 +1296,40 @@
                 [70.7299, 92.2041],
             ];
 
-            async function loadModels() {
+            function loadModels() {
                 const statusBanner = document.getElementById("statusBanner");
-                try {
-                    statusBanner.classList.add("loading");
-                    statusBanner.textContent = "Loading AI models...";
+                statusBanner.classList.add("loading");
+                statusBanner.textContent = "Loading AI models...";
 
-                    ort.env.wasm.wasmPaths =
-                        "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/";
+                ort.env.wasm.wasmPaths =
+                    "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/";
 
-                    [detSession, recSession] = await Promise.all([
-                        ort.InferenceSession.create("models/detection.onnx", {
-                            executionProviders: ["wasm"],
-                        }),
-                        ort.InferenceSession.create("models/recognition.onnx", {
-                            executionProviders: ["wasm"],
-                        }),
-                    ]);
-
-                    modelsLoaded = true;
-                    statusBanner.classList.remove("loading");
-                    statusBanner.textContent = "Ready to analyze faces";
-
-                    setTimeout(() => {
-                        statusBanner.style.display = "none";
-                    }, 3000);
-                } catch (error) {
-                    console.error("Error loading models:", error);
-                    statusBanner.classList.add("error");
-                    statusBanner.textContent =
-                        "Error loading AI models. Please refresh the page.";
-                }
+                modelsReadyPromise = Promise.all([
+                    ort.InferenceSession.create("models/detection.onnx", {
+                        executionProviders: ["wasm"],
+                    }),
+                    ort.InferenceSession.create("models/recognition.onnx", {
+                        executionProviders: ["wasm"],
+                    }),
+                ])
+                    .then(([det, rec]) => {
+                        detSession = det;
+                        recSession = rec;
+                        modelsLoaded = true;
+                        statusBanner.classList.remove("loading");
+                        statusBanner.textContent = "Ready to analyze faces";
+                        setTimeout(() => {
+                            statusBanner.style.display = "none";
+                        }, 3000);
+                    })
+                    .catch((error) => {
+                        console.error("Error loading models:", error);
+                        statusBanner.classList.add("error");
+                        statusBanner.textContent =
+                            "Error loading AI models. Please refresh the page.";
+                        throw error;
+                    });
+                return modelsReadyPromise;
             }
 
             // Load models on page load
@@ -1430,10 +1462,11 @@
                 Array.from(files).forEach((file) => {
                     if (!file.type.startsWith("image/")) return;
                     const reader = new FileReader();
-                    reader.onload = (e) => {
+                    reader.onload = async (e) => {
+                        const data = await downscaleImage(e.target.result);
                         personData[personId].images.push({
-                            data: e.target.result,
-                            file: file,
+                            data,
+                            file,
                         });
                         if (personModal.dataset.editing === personId) {
                             renderModalPreview(personId);
@@ -1455,9 +1488,7 @@
                     personData[3].name;
 
                 document.getElementById("analyzeBtn").disabled = !(
-                    allHaveImages &&
-                    allHaveNames &&
-                    modelsLoaded
+                    allHaveImages && allHaveNames
                 );
             }
 
@@ -1768,6 +1799,13 @@
                     '<p class="loading">Analyzing facial features</p>';
 
                 try {
+                    if (!modelsLoaded) {
+                        spectrumContent.innerHTML =
+                            '<p class="loading">Loading AI models</p>';
+                        await modelsReadyPromise;
+                        spectrumContent.innerHTML =
+                            '<p class="loading">Analyzing facial features</p>';
+                    }
                     // Get embeddings for all persons
                     for (const personId of ["1", "2", "3"]) {
                         personData[personId].embeddings = [];
