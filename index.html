@@ -16,10 +16,7 @@
             href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;600&family=Inter:wght@300;400;500;600&display=swap"
             rel="stylesheet"
         />
-        <script
-            defer
-            src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"
-        ></script>
+        <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js"></script>
         <style>
             :root {
                 --bg-primary: #0d0d0d;
@@ -909,21 +906,41 @@
             };
 
             let modelsLoaded = false;
+            let detSession = null;
+            let recSession = null;
 
-            // Load face-api.js models
+            const DET_INPUT_SIZE = 640;
+            const DET_SCORE_THRESH = 0.5;
+            const DET_NMS_THRESH = 0.4;
+            const FEAT_STRIDES = [8, 16, 32];
+            const NUM_ANCHORS = 2;
+
+            // ArcFace canonical 5-keypoint template for 112x112 alignment
+            // Order: left eye, right eye, nose, left mouth, right mouth
+            const ARCFACE_TEMPLATE = [
+                [38.2946, 51.6963],
+                [73.5318, 51.5014],
+                [56.0252, 71.7366],
+                [41.5493, 92.3655],
+                [70.7299, 92.2041],
+            ];
+
             async function loadModels() {
                 const statusBanner = document.getElementById("statusBanner");
                 try {
                     statusBanner.classList.add("loading");
                     statusBanner.textContent = "Loading AI models...";
 
-                    const MODEL_URL =
-                        "https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/";
+                    ort.env.wasm.wasmPaths =
+                        "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/";
 
-                    await Promise.all([
-                        faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
-                        faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
-                        faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
+                    [detSession, recSession] = await Promise.all([
+                        ort.InferenceSession.create("models/detection.onnx", {
+                            executionProviders: ["wasm"],
+                        }),
+                        ort.InferenceSession.create("models/recognition.onnx", {
+                            executionProviders: ["wasm"],
+                        }),
                     ]);
 
                     modelsLoaded = true;
@@ -1025,30 +1042,254 @@
                 );
             }
 
-            async function getFaceEmbedding(imageDataUrl) {
+            function loadImage(imageDataUrl) {
                 return new Promise((resolve, reject) => {
                     const img = new Image();
-                    img.onload = async () => {
-                        try {
-                            const detection = await faceapi
-                                .detectSingleFace(img)
-                                .withFaceLandmarks()
-                                .withFaceDescriptor();
-
-                            if (!detection) {
-                                reject(new Error("No face detected in image"));
-                                return;
-                            }
-
-                            resolve(detection.descriptor);
-                        } catch (error) {
-                            reject(error);
-                        }
-                    };
+                    img.onload = () => resolve(img);
                     img.onerror = () =>
                         reject(new Error("Failed to load image"));
                     img.src = imageDataUrl;
                 });
+            }
+
+            // Letterbox an image into a square canvas of `size` and return
+            // pixel data plus the scale + offsets used so coordinates can be
+            // mapped back to the original image.
+            function letterboxToCanvas(img, size) {
+                const scale = Math.min(size / img.width, size / img.height);
+                const w = Math.round(img.width * scale);
+                const h = Math.round(img.height * scale);
+                const dx = Math.floor((size - w) / 2);
+                const dy = Math.floor((size - h) / 2);
+                const canvas = document.createElement("canvas");
+                canvas.width = size;
+                canvas.height = size;
+                const ctx = canvas.getContext("2d");
+                ctx.fillStyle = "rgb(0,0,0)";
+                ctx.fillRect(0, 0, size, size);
+                ctx.drawImage(img, dx, dy, w, h);
+                const imageData = ctx.getImageData(0, 0, size, size);
+                return { imageData, scale, dx, dy };
+            }
+
+            // Convert RGBA ImageData → CHW Float32Array with mean/std applied.
+            function imageDataToCHW(imageData, mean, std) {
+                const { data, width, height } = imageData;
+                const out = new Float32Array(3 * width * height);
+                const plane = width * height;
+                for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+                    out[p] = (data[i] - mean) / std;
+                    out[p + plane] = (data[i + 1] - mean) / std;
+                    out[p + 2 * plane] = (data[i + 2] - mean) / std;
+                }
+                return out;
+            }
+
+            function generateAnchors(size, stride, numAnchors) {
+                const h = Math.floor(size / stride);
+                const w = Math.floor(size / stride);
+                const centers = new Float32Array(h * w * numAnchors * 2);
+                let i = 0;
+                for (let y = 0; y < h; y++) {
+                    for (let x = 0; x < w; x++) {
+                        for (let a = 0; a < numAnchors; a++) {
+                            centers[i++] = x * stride;
+                            centers[i++] = y * stride;
+                        }
+                    }
+                }
+                return centers;
+            }
+
+            function nms(boxes, scores, threshold) {
+                const idxs = scores
+                    .map((s, i) => [s, i])
+                    .sort((a, b) => b[0] - a[0])
+                    .map((p) => p[1]);
+                const keep = [];
+                const suppressed = new Uint8Array(idxs.length);
+                for (let i = 0; i < idxs.length; i++) {
+                    const ii = idxs[i];
+                    if (suppressed[ii]) continue;
+                    keep.push(ii);
+                    const [ax1, ay1, ax2, ay2] = boxes[ii];
+                    const aArea = (ax2 - ax1) * (ay2 - ay1);
+                    for (let j = i + 1; j < idxs.length; j++) {
+                        const jj = idxs[j];
+                        if (suppressed[jj]) continue;
+                        const [bx1, by1, bx2, by2] = boxes[jj];
+                        const ix1 = Math.max(ax1, bx1);
+                        const iy1 = Math.max(ay1, by1);
+                        const ix2 = Math.min(ax2, bx2);
+                        const iy2 = Math.min(ay2, by2);
+                        const iw = Math.max(0, ix2 - ix1);
+                        const ih = Math.max(0, iy2 - iy1);
+                        const inter = iw * ih;
+                        const bArea = (bx2 - bx1) * (by2 - by1);
+                        const iou = inter / (aArea + bArea - inter);
+                        if (iou > threshold) suppressed[jj] = 1;
+                    }
+                }
+                return keep;
+            }
+
+            async function detectBestFace(img) {
+                const { imageData, scale, dx, dy } = letterboxToCanvas(
+                    img,
+                    DET_INPUT_SIZE,
+                );
+                const tensorData = imageDataToCHW(imageData, 127.5, 128.0);
+                const inputName = detSession.inputNames[0];
+                const feeds = {};
+                feeds[inputName] = new ort.Tensor(
+                    "float32",
+                    tensorData,
+                    [1, 3, DET_INPUT_SIZE, DET_INPUT_SIZE],
+                );
+                const out = await detSession.run(feeds);
+                const outNames = detSession.outputNames;
+
+                const allBoxes = [];
+                const allScores = [];
+                const allKps = [];
+
+                for (let s = 0; s < FEAT_STRIDES.length; s++) {
+                    const stride = FEAT_STRIDES[s];
+                    const scores = out[outNames[s]].data;
+                    const bboxPreds = out[outNames[s + 3]].data;
+                    const kpsPreds = out[outNames[s + 6]].data;
+                    const anchors = generateAnchors(
+                        DET_INPUT_SIZE,
+                        stride,
+                        NUM_ANCHORS,
+                    );
+                    const n = scores.length;
+                    for (let i = 0; i < n; i++) {
+                        if (scores[i] < DET_SCORE_THRESH) continue;
+                        const cx = anchors[i * 2];
+                        const cy = anchors[i * 2 + 1];
+                        const x1 = cx - bboxPreds[i * 4] * stride;
+                        const y1 = cy - bboxPreds[i * 4 + 1] * stride;
+                        const x2 = cx + bboxPreds[i * 4 + 2] * stride;
+                        const y2 = cy + bboxPreds[i * 4 + 3] * stride;
+                        allBoxes.push([x1, y1, x2, y2]);
+                        allScores.push(scores[i]);
+                        const kp = new Array(5);
+                        for (let k = 0; k < 5; k++) {
+                            kp[k] = [
+                                cx + kpsPreds[i * 10 + k * 2] * stride,
+                                cy + kpsPreds[i * 10 + k * 2 + 1] * stride,
+                            ];
+                        }
+                        allKps.push(kp);
+                    }
+                }
+
+                if (!allScores.length) return null;
+                const keep = nms(allBoxes, allScores, DET_NMS_THRESH);
+                // Pick largest face among kept (more reliable than top score)
+                let bestIdx = keep[0];
+                let bestArea = 0;
+                for (const k of keep) {
+                    const [x1, y1, x2, y2] = allBoxes[k];
+                    const a = (x2 - x1) * (y2 - y1);
+                    if (a > bestArea) {
+                        bestArea = a;
+                        bestIdx = k;
+                    }
+                }
+                // Map keypoints back to original image coordinates
+                const kpsOrig = allKps[bestIdx].map(([x, y]) => [
+                    (x - dx) / scale,
+                    (y - dy) / scale,
+                ]);
+                return { keypoints: kpsOrig };
+            }
+
+            // Compute 2D similarity transform (scale + rotation + translation)
+            // mapping src points → dst points via least squares.
+            // Returns 6 numbers (a, b, c, d, e, f) for the matrix
+            // [[a, c, e], [b, d, f]] applied as p' = M * [p; 1].
+            function similarityTransform(src, dst) {
+                const n = src.length;
+                let msx = 0,
+                    msy = 0,
+                    mdx = 0,
+                    mdy = 0;
+                for (let i = 0; i < n; i++) {
+                    msx += src[i][0];
+                    msy += src[i][1];
+                    mdx += dst[i][0];
+                    mdy += dst[i][1];
+                }
+                msx /= n;
+                msy /= n;
+                mdx /= n;
+                mdy /= n;
+                let s2 = 0,
+                    c1 = 0,
+                    c2 = 0;
+                for (let i = 0; i < n; i++) {
+                    const sx = src[i][0] - msx;
+                    const sy = src[i][1] - msy;
+                    const dx = dst[i][0] - mdx;
+                    const dy = dst[i][1] - mdy;
+                    s2 += sx * sx + sy * sy;
+                    c1 += sx * dx + sy * dy;
+                    c2 += -sy * dx + sx * dy;
+                }
+                const a = c1 / s2;
+                const b = c2 / s2;
+                const tx = mdx - a * msx + b * msy;
+                const ty = mdy - a * msy - b * msx;
+                // matrix [[a, -b, tx], [b, a, ty]]
+                return { a, b, c: -b, d: a, e: tx, f: ty };
+            }
+
+            function alignFace(img, keypoints) {
+                const m = similarityTransform(keypoints, ARCFACE_TEMPLATE);
+                const canvas = document.createElement("canvas");
+                canvas.width = 112;
+                canvas.height = 112;
+                const ctx = canvas.getContext("2d");
+                ctx.fillStyle = "rgb(0,0,0)";
+                ctx.fillRect(0, 0, 112, 112);
+                ctx.setTransform(m.a, m.b, m.c, m.d, m.e, m.f);
+                ctx.drawImage(img, 0, 0);
+                ctx.setTransform(1, 0, 0, 1, 0, 0);
+                return ctx.getImageData(0, 0, 112, 112);
+            }
+
+            async function embedAlignedFace(alignedImageData) {
+                const tensorData = imageDataToCHW(
+                    alignedImageData,
+                    127.5,
+                    127.5,
+                );
+                const inputName = recSession.inputNames[0];
+                const feeds = {};
+                feeds[inputName] = new ort.Tensor(
+                    "float32",
+                    tensorData,
+                    [1, 3, 112, 112],
+                );
+                const out = await recSession.run(feeds);
+                const emb = out[recSession.outputNames[0]].data;
+                // L2-normalize
+                let norm = 0;
+                for (let i = 0; i < emb.length; i++) norm += emb[i] * emb[i];
+                norm = Math.sqrt(norm) || 1;
+                const normed = new Float32Array(emb.length);
+                for (let i = 0; i < emb.length; i++) normed[i] = emb[i] / norm;
+                return normed;
+            }
+
+            async function getFaceEmbedding(imageDataUrl) {
+                const img = await loadImage(imageDataUrl);
+                const det = await detectBestFace(img);
+                if (!det) throw new Error("No face detected in image");
+                const aligned = alignFace(img, det.keypoints);
+                return await embedAlignedFace(aligned);
             }
 
             function euclideanDistance(embedding1, embedding2) {
