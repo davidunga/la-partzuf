@@ -1211,6 +1211,42 @@
                 3: { images: [], name: "", embeddings: [] },
             };
 
+            const STORAGE_KEY = "la-partzuf-people-v1";
+
+            function savePersonData() {
+                try {
+                    const serial = {};
+                    for (const id of ["1", "2", "3"]) {
+                        serial[id] = {
+                            name: personData[id].name,
+                            images: personData[id].images.map((it) => ({
+                                data: it.data,
+                            })),
+                        };
+                    }
+                    localStorage.setItem(STORAGE_KEY, JSON.stringify(serial));
+                } catch (e) {
+                    console.warn("Failed to persist person data:", e);
+                }
+            }
+
+            function loadPersonData() {
+                try {
+                    const raw = localStorage.getItem(STORAGE_KEY);
+                    if (!raw) return;
+                    const parsed = JSON.parse(raw);
+                    for (const id of ["1", "2", "3"]) {
+                        if (!parsed[id]) continue;
+                        personData[id].name = parsed[id].name || "";
+                        personData[id].images = (parsed[id].images || []).map(
+                            (it) => ({ data: it.data, file: null }),
+                        );
+                    }
+                } catch (e) {
+                    console.warn("Failed to restore person data:", e);
+                }
+            }
+
             let modelsLoaded = false;
             let detSession = null;
             let recSession = null;
@@ -1267,6 +1303,11 @@
             // Load models on page load
             window.addEventListener("load", loadModels);
 
+            // Restore persisted person data and refresh role buttons
+            loadPersonData();
+            for (const id of ["1", "2", "3"]) updateRoleButton(id);
+            updateAnalyzeButton();
+
             const ROLE_LABELS = { 1: "Parent", 2: "Parent", 3: "Child" };
 
             const personModal = document.getElementById("personModal");
@@ -1322,6 +1363,7 @@
                     const i = Number(wrap.dataset.idx);
                     personData[personId].images.splice(i, 1);
                     renderModalPreview(personId);
+                    savePersonData();
                 });
                 wrap.appendChild(img);
                 wrap.appendChild(btn);
@@ -1369,7 +1411,10 @@
 
             modalNameInput.addEventListener("input", (e) => {
                 const personId = personModal.dataset.editing;
-                if (personId) personData[personId].name = e.target.value;
+                if (personId) {
+                    personData[personId].name = e.target.value;
+                    savePersonData();
+                }
             });
 
             modalUploadZone.addEventListener("click", () =>
@@ -1393,6 +1438,7 @@
                         if (personModal.dataset.editing === personId) {
                             renderModalPreview(personId);
                         }
+                        savePersonData();
                     };
                     reader.readAsDataURL(file);
                 });
@@ -1801,8 +1847,11 @@
                 const { distance_1_3, distance_2_3, position } = result;
                 const positionPercent = position * 100;
 
-                const sim1 = Math.max(0, (1 - distance_1_3) * 100);
-                const sim2 = Math.max(0, (1 - distance_2_3) * 100);
+                const rawSim1 = Math.max(0, 1 - distance_1_3);
+                const rawSim2 = Math.max(0, 1 - distance_2_3);
+                const total = rawSim1 + rawSim2 || 1;
+                const sim1 = (rawSim1 / total) * 100;
+                const sim2 = (rawSim2 / total) * 100;
 
                 const parent1Img = personData["1"].images[0].data;
                 const parent2Img = personData["2"].images[0].data;
