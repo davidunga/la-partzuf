@@ -2023,24 +2023,26 @@
                     );
 
                     // Cosine distance ∈ [0, 2]; convert to similarity in
-                    // [0, 1] via (2 - d) / 2. Use the parents' mutual
-                    // similarity as the "unrelated faces" floor so we
-                    // amplify only the kinship signal above it.
-                    const floor =
-                        1 - cosineDistance(parent1Avg, parent2Avg) / 2;
+                    // [0, 1] via (2 - d) / 2, then raise to GAMMA to
+                    // amplify differences (raw cosine sim sits in a narrow
+                    // band for face embeddings, so without this both
+                    // children look ~50/50).
+                    const GAMMA = 2;
 
                     const childResults = [];
                     for (const child of personData.children) {
                         if (!isEntryFilled(child)) continue;
                         const childAvg = await getAverageEmbedding(child);
-                        const sim1 =
-                            1 - cosineDistance(parent1Avg, childAvg) / 2;
-                        const sim2 =
-                            1 - cosineDistance(parent2Avg, childAvg) / 2;
-                        const excess1 = Math.max(0, sim1 - floor);
-                        const excess2 = Math.max(0, sim2 - floor);
-                        const total = excess1 + excess2;
-                        const share1 = total === 0 ? 0.5 : excess1 / total;
+                        const sim1 = Math.pow(
+                            1 - cosineDistance(parent1Avg, childAvg) / 2,
+                            GAMMA,
+                        );
+                        const sim2 = Math.pow(
+                            1 - cosineDistance(parent2Avg, childAvg) / 2,
+                            GAMMA,
+                        );
+                        const total = sim1 + sim2;
+                        const share1 = total === 0 ? 0.5 : sim1 / total;
                         childResults.push({
                             name: child.name,
                             image: child.images[0].data,
