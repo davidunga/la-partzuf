@@ -2027,7 +2027,7 @@
                     // amplify differences (raw cosine sim sits in a narrow
                     // band for face embeddings, so without this both
                     // children look ~50/50).
-                    const GAMMA = 2;
+                    const GAMMA = 4;
 
                     const childResults = [];
                     for (const child of personData.children) {
