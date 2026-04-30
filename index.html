@@ -2022,23 +2022,29 @@
                         personData.parent2,
                     );
 
+                    // Cosine distance ∈ [0, 2]; convert to similarity in
+                    // [0, 1] via (2 - d) / 2. Use the parents' mutual
+                    // similarity as the "unrelated faces" floor so we
+                    // amplify only the kinship signal above it.
+                    const floor =
+                        1 - cosineDistance(parent1Avg, parent2Avg) / 2;
+
                     const childResults = [];
                     for (const child of personData.children) {
                         if (!isEntryFilled(child)) continue;
                         const childAvg = await getAverageEmbedding(child);
-                        // Cosine distance ∈ [0, 2]; convert to similarity in
-                        // [0, 1] via (2 - d) / 2 so orthogonal maps to 0.5
-                        // and anti-correlated to 0.
-                        const sim1 = 1 - cosineDistance(parent1Avg, childAvg) / 2;
-                        const sim2 = 1 - cosineDistance(parent2Avg, childAvg) / 2;
-                        const total = sim1 + sim2;
-                        const share1 = total === 0 ? 0.5 : sim1 / total;
+                        const sim1 =
+                            1 - cosineDistance(parent1Avg, childAvg) / 2;
+                        const sim2 =
+                            1 - cosineDistance(parent2Avg, childAvg) / 2;
+                        const excess1 = Math.max(0, sim1 - floor);
+                        const excess2 = Math.max(0, sim2 - floor);
+                        const total = excess1 + excess2;
+                        const share1 = total === 0 ? 0.5 : excess1 / total;
                         childResults.push({
                             name: child.name,
                             image: child.images[0].data,
-                            sim1,
-                            sim2,
-                            position: share1,
+                            share1,
                         });
                     }
 
@@ -2086,11 +2092,10 @@
 
                 const childMarkers = children
                     .map((c, idx) => {
-                        const total = c.sim1 + c.sim2 || 1;
-                        const sim1 = (c.sim1 / total) * 100;
-                        const sim2 = (c.sim2 / total) * 100;
+                        const sim1 = c.share1 * 100;
+                        const sim2 = (1 - c.share1) * 100;
                         const side = idx % 2 === 0 ? "" : " below";
-                        const pct = c.position * 100;
+                        const pct = c.share1 * 100;
                         return `
                         <div class="child-marker${side}" style="left: ${pct}%">
                             <div class="child-labels">
