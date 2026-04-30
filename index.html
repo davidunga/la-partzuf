@@ -2026,19 +2026,19 @@
                     for (const child of personData.children) {
                         if (!isEntryFilled(child)) continue;
                         const childAvg = await getAverageEmbedding(child);
-                        const d1 = cosineDistance(parent1Avg, childAvg);
-                        const d2 = cosineDistance(parent2Avg, childAvg);
-                        const total = d1 + d2;
-                        const position =
-                            total === 0
-                                ? 0.5
-                                : Math.max(0, Math.min(1, d2 / total));
+                        // Cosine distance ∈ [0, 2]; convert to similarity in
+                        // [0, 1] via (2 - d) / 2 so orthogonal maps to 0.5
+                        // and anti-correlated to 0.
+                        const sim1 = 1 - cosineDistance(parent1Avg, childAvg) / 2;
+                        const sim2 = 1 - cosineDistance(parent2Avg, childAvg) / 2;
+                        const total = sim1 + sim2;
+                        const share1 = total === 0 ? 0.5 : sim1 / total;
                         childResults.push({
                             name: child.name,
                             image: child.images[0].data,
-                            d1,
-                            d2,
-                            position,
+                            sim1,
+                            sim2,
+                            position: share1,
                         });
                     }
 
@@ -2086,11 +2086,9 @@
 
                 const childMarkers = children
                     .map((c, idx) => {
-                        const rawSim1 = Math.max(0, 1 - c.d1);
-                        const rawSim2 = Math.max(0, 1 - c.d2);
-                        const total = rawSim1 + rawSim2 || 1;
-                        const sim1 = (rawSim1 / total) * 100;
-                        const sim2 = (rawSim2 / total) * 100;
+                        const total = c.sim1 + c.sim2 || 1;
+                        const sim1 = (c.sim1 / total) * 100;
+                        const sim2 = (c.sim2 / total) * 100;
                         const side = idx % 2 === 0 ? "" : " below";
                         const pct = c.position * 100;
                         return `
